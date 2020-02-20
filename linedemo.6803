@@ -1,0 +1,1170 @@
+;**************************************************
+;* NAME: linedemo
+;**************************************************
+;* DESCRIPTION:
+;*   6803 TASM line demo
+;*   Copyright (c) 2011-2013 by James Diffendaffer
+;* Version: 1.06 Date: July 13, 2013
+;*   1.06 07/13/13 - minor cleanup, added placeholder for XGDX HD6303 instruction
+;*   1.05 03/26/13 - fixed RG6 and CG6 mode comments
+;*   1.04 07/22/12 - removed some debug code and fixed typos for a release
+;*   1.03 01/30/12 - optimizations, added print string routine, changed naming conventions
+;*   1.02 - added support for all CG modes
+;*   1.01 - partial CG mode support
+;*   1.00 - added 64 column text routines, first source code release
+;*   0.75 - added support for all RG modes
+;*   0.50 - line and pixel routines
+;**************************************************
+
+;include MOTO.h
+;defined for tasm.  tasm normally doesn't support motorola directives
+.MSFIRST        ; Most Significant byte first
+
+#define EQU     .EQU
+#define ORG     .ORG
+#define RMB     .BLOCK
+#define FCB     .BYTE
+#define FCC     .TEXT
+#define FDB     .WORD
+#define END		.END
+
+#define equ     .EQU
+#define org     .ORG
+#define rmb     .BLOCK
+#define fcb     .BYTE
+#define fcc     .TEXT
+#define fdb     .WORD
+#define	end		.END
+
+
+;**************************************************
+;MC-10 ROM entry vector addresses
+;**************************************************
+POLCAT	equ	$FFDC		; Read the keyboard
+CHROUT	equ	$FFDE		; Output a character to the current device
+CRSDON	equ	$FFE0		; Turn on the Cassette
+BLKIN	equ	$FFE2		; Write a block of data to the cassette
+BLKOUT	equ	$FFE4		; Read a block of data from the cassette
+SNDOUT	equ	$FFE6		; Sound Output
+WRTLDR	equ	$FFE8		; Write Leader
+GIVABF	equ	$FFEA		; Convert 2 bytes to Basic
+INTCNV	equ	$FFEC		; Convert BASIC to 2 bytes
+
+;**************************************************
+;MC-10 Graphics hardware definitions
+;**************************************************
+#define	screen	$4000		; address of MC-10 screen memory
+#define	vdgport	$BFFF		; I/O address to set the VDG mode
+#define	SG4	%00000000	; SG4 semigraphics 4 mode bits
+#define	SG6	%00000100	; SG6 semigraphics 6 mode bits
+#define	CG1	%00100000	; CG1 graphics mode bits
+#define	RG1	%00110000	; RG1 graphics mode bits
+#define	CG2	%00101000	; CG2 graphics mode bits
+#define	RG2	%00111000	; RG2 graphics mode bits
+#define	CG3	%00100100	; CG3 graphics mode bits
+#define	RG3	%00110100	; RG3 graphics mode bits
+#define	CG6	%00101100	; CG6 graphics mode bits
+#define	RG6	%00111100	; RG6 graphics mode bits
+#define	CSS	%01000000	; color set select bit
+
+
+;**************************************************
+;* screen parameters
+;*
+;*  Define the graphics mode you are going to use as 1
+;*  This is used to set up all the screen parameters used by
+;*  the graphics routines so they will work in your 
+;*  chosen mode. 
+;**************************************************
+#define GFX_RG6	1		; Set the mode we will use here
+
+
+;**************************************************
+;* sets up the screen parameters based on define above
+;**************************************************
+#ifdef GFX_CG1			; parameters for CG1
+#define	CGMODE 1
+ScreenWidth	equ	64
+ScreenHeight	equ	64
+BytesPerLine	equ	(ScreenWidth)/4
+#endif
+#ifdef GFX_CG2			; parameters for CG2
+#define	CGMODE 1
+ScreenWidth	equ	128
+ScreenHeight	equ	64
+BytesPerLine	equ	(ScreenWidth)/4
+#endif
+#ifdef GFX_CG3			; parameters for CG2
+#define	CGMODE 1
+ScreenWidth	equ	128
+ScreenHeight	equ	96
+BytesPerLine	equ	(ScreenWidth)/4
+#endif
+#ifdef GFX_CG6			; parameters for CG6
+#define	CGMODE 1
+ScreenWidth	equ	128
+ScreenHeight	equ	192
+BytesPerLine	equ	(ScreenWidth)/4
+#endif
+
+#ifdef GFX_RG1			; parameters for RG2
+#define	RGMODE 1
+ScreenWidth	equ	128
+ScreenHeight	equ	64
+BytesPerLine	equ	((ScreenWidth)/8)
+#endif
+#ifdef GFX_RG2			; parameters for RG2
+#define	RGMODE 1
+ScreenWidth	equ	128
+ScreenHeight	equ	96
+BytesPerLine	equ	((ScreenWidth)/8)
+#endif
+#ifdef GFX_RG3			; parameters for RG3
+#define	RGMODE 1
+ScreenWidth	equ	128
+ScreenHeight	equ	192
+BytesPerLine	equ	((ScreenWidth)/8)
+#endif
+#ifdef GFX_RG6			; parameters for RG6
+#define	RGMODE 1
+ScreenWidth	equ	256
+ScreenHeight	equ	192
+BytesPerLine	equ	((ScreenWidth)/8)
+#endif
+
+MAX_X	equ	ScreenWidth-1
+MAX_Y	equ	ScreenHeight-1
+
+;**************************************************
+;page zero variables
+;**************************************************
+temp0	equ	$00A0				; temporary storage location.  used for transfering D to X or X to D etc...
+temp1	equ	temp0+2				; temporary storage location.
+temp2	equ	temp1+2				; temporary storage location.
+temp3	equ	temp2+2				; temporary storage location.
+temp4	equ	temp3+2
+
+; for graphics
+;HX0	equ	temp0+2				; High byte of 16 bit X0 for use in X register, always zero
+;X0	equ	HX0+1				; X0
+X0	equ	temp4+2				; X0
+HY0	equ	X0+1				; High byte of 16 bit Y0 for use in X register, always zero
+Y0	equ	HY0+1
+;HX1	equ	Y0+1				; High byte of 16 bit X1 for use in X register, always zero
+;X1	equ	HX1+1				; X1
+X1	equ	Y0+1				; X1
+HY1	equ	X1+1				; High byte of 16 bit Y1 for use in X register, always zero
+Y1	equ	HY1+1				; Y1	
+FGCOLOR	equ	Y1+1				; Color Mask (Foreground Color)
+
+;OE	equ	FGCOLOR+1
+charptr	equ	FGCOLOR+1
+fscreen	equ	charptr+2
+fcount	equ	fscreen+2
+stacktmp	equ	fcount+1
+
+_endusrvars	equ	stacktmp+2
+
+;**************************************************
+; bresenham line routine variables and macros
+;**************************************************
+f	equ	_endusrvars	; Bresenham's variable
+dx	equ	f+2		; delta x
+dy	equ	dx+2		; delta y
+sx	equ	dy+2		; step direction flags
+sy	equ	sx+2
+
+#define LINE(x0,y0,x1,y1) ldaa x0 \ staa X0 \ ldaa y0 \ staa Y0 \ ldaa x1 \ staa X1 \ ldaa y1 \ staa Y1 \ jsr line
+#define LINETO(x1,y1) ldaa x1 \ staa x0 \ ldaa y1 \ staa y0 \ ldaa x1 \ staa X1 \ ldaa y1 \ staa Y1 \ jsr line
+
+;**************************************************
+; graphics text routine variables and macros
+;**************************************************
+row	equ	sy+2
+col	equ	row+1
+
+#DEFINE PRINTAT(loc,str) ldd loc \ ldx str \ jsr print_at
+#DEFINE PRINT(str) ldx str \ jsr print
+
+;**************************************************
+; location to temporarily hold the stack pointer
+; when it is used as a pointer register
+;**************************************************
+stacktemp	equ	col+1
+
+
+
+
+;**************************************************
+;**************************************************
+;**************************************************
+
+START	org	$8000		;where to store out program
+;START	org	(screen+(BytesPerLine*ScreenHeight))	;start right after screen memory
+
+;**************************************************
+;* NAME: linedemo
+;**************************************************
+;* DESCRIPTION:
+;*  a short program to demonstrate the use of 
+;*  routines in the graphics library
+;**************************************************
+linedemo:
+	; save the registers we will modify
+;	psha
+;	pshb
+;	pshx
+
+; init page zero variables for line/pixel routines
+	ldaa	#BytesPerLine		; for the multiply in the set routine
+	staa	HY0	
+	staa	HY1
+;	clra
+;	staa	HX0			;clear the MSBs, only used for loading X
+;	staa	HX1
+	jsr	cls
+
+	;***************************
+	; set graphics mode here, make sure you defined it as 1 in the define/equ section above
+	; so that the graphics routines will work for that mode
+	;***************************
+	ldaa	#RG6 ;+CSS		; the graphics and color mode
+	staa	vdgport			; set it
+
+	ldd	#$0000			; row, col
+	staa	row
+	stab	col
+
+;	clra
+;	staa	FGCOLOR			; set the foreground color
+
+start:
+
+;examples using macros to print and draw lines	
+	PRINTAT(#265, #demostring)	;print a string
+;	LINE(#0, #0, #MAX_X, #MAX_Y)			;draw an x across the screen
+;	LINE(#MAX_X, #0, #0, #MAX_Y)
+	
+	
+
+; 64 character/line demo, prints entire character set
+lllm:	ldaa	#' '			; the first character in the font
+	staa	temp3			; save it as a counter
+llll:
+	jsr	print_64		; print the character
+	inc	temp3			; select next character
+	ldaa	temp3			; load it
+	cmpa	#'~'			; are we past the last character in the font?
+	ble	llll			;  branch if not
+
+	ldaa	row
+	cmpa	((ScreenHeight/8)*(BytesPerLine/2))	;#14;	ble	lllm
+
+
+;line drawing
+	ldab	FGCOLOR
+	clra
+	addd	#%0000000001010101	; increment the color mask
+	cmpa	#0
+	beq	_colorset
+
+	addb	#%01010101		; increment the color mask
+	bcc	_colorset
+	clrb
+_colorset:
+	stab	FGCOLOR
+	
+	ldab	#MAX_X			; start X1 at right of screen
+	stab	temp3
+_loopa:
+	; X0,Y0,X1,Y1 are modified in the line drawing routine and must be set for each line
+	ldaa	#(MAX_X/2)		; X0 is at the middle of the screen
+	staa	X0
+	clra				; Y0 is at the top of the screen
+	staa	Y0
+	ldaa	temp3
+	staa	X1			; set the current X1
+;	ldaa	#(MAX_Y /2)		; Y1 is half way down the screen
+	ldaa	#MAX_Y			; Y1 at the bottom of the screen
+	staa	Y1
+	jsr	line			; draw the line
+
+	ldaa	temp3			; load X1
+	sbca	#7			; subract 7
+	staa	temp3			; save it
+	bne	_loopa			; go again until X1 = 0
+
+					
+waitkey:
+;	ldaa	$0002			;check for keypress
+;	ldx	POLCAT	
+;	jsr	0,x
+;	beq	waitkey			; 0 = no key pressed
+
+	bra	start
+
+	rts
+	
+demostring:
+	fcc		"This is a test of the string printing routine.",0
+;	fcb		0
+
+;**************************************************
+;* NAME: cls
+;**************************************************
+;* DESCRIPTION:
+;*  Clears the screen memory to zeros
+;*
+;* The stack pointer is used as 2nd pointer register
+;* but interrupts must be disabled to do this.
+;* We could just use X as a pointer but PSHX is faster
+;* than the alternative code
+;**************************************************
+cls
+	pshx
+	pshb
+;	psha
+	
+	tsx				; copy stack pointer to x
+	stx	stacktemp
+;	wai				;<- uncomment if you want to make sure cls takes place between interrupts
+	sei				;disable interrupts
+	ldx	#screen+(BytesPerLine*(ScreenHeight))-1	;last screen address.
+	txs				;point S to screen top
+	ldx	#0			;clear the screen to zeros
+	ldab	#((BytesPerLine*(ScreenHeight))/32)		;number of loops to clear screen
+_clsloop:
+	pshx				; Partially unrolled loop clears at least an entire screen row each pass
+	pshx				;  lets us use an 8 bit loop counter even in RG6
+	pshx				;  so we don't have to dec and test LSB and MSB of loop counter (there is no DECD instruction)
+	pshx				;  32 bytes / pass = first power of 2 with loop counter below 256 (fits in 1 byte)
+	pshx				; Fewer loops also requires fewer loop instructions to execute
+	pshx				;  and saves a lot of clock cycles.
+	pshx
+	pshx
+	pshx
+	pshx
+	pshx
+	pshx
+	pshx
+	pshx
+	pshx
+	pshx
+	decb				;decrement loop counter
+	bne	_clsloop			;branch until it equals zero
+	ldx	stacktemp
+	txs				;restore the stack pointer
+	cli				;enable interrupts
+
+;	pula
+	pulb
+	pulx
+
+	rts
+
+	
+;**************************************************
+;* NAME: _line
+;**************************************************
+;* DESCRIPTION:
+;
+; line.s				9/20/2008
+;
+; This is the symmetric Bresenham's line algorithm.
+; Based loosely on 6502 Atari code by Bart Jaszcz
+;
+; author:
+;	James Diffendaffer
+;
+;**************************************************
+.MODULE Line
+line:
+	pshx				; save registers
+	pshb
+	psha
+	
+	clra				; clear MSB or D register
+	ldab	X0			; get X0 coordinate
+	std	f			; store in f
+	ldab	X1
+	subd	f			; dx -= f (X1 -= X0)
+	std	dx			; differenc in X
+	bmi	_negate1			; if dx is negative, negate it
+	ldd	#1			; otherwise dx is positive
+	stab	sx			; set positive step-x flag
+;	ldaa	#0			; clear MSB of D for calc_dy
+;	bpl	_calc_dy			; continue to calc dy code
+	bra	_calc_dy			; continue to calc dy code
+
+_negate1:				; negate dx so it's now positive
+	clra
+	clrb
+	subd	dx
+	std	dx
+	clr	sx			; set step-x flag to 0 (negative step)
+_calc_dy:
+	clra				; MSB of D should already be clear?
+	
+	ldab	Y0			; get Y0 coordinate
+	std	f			; store in f
+	ldab	Y1			; get Y1 coordinate
+	subd	f			; dy -= f (Y1 -= Y0)
+	std	dy			; difference in y
+	bmi	_negate2			; if dy is negative, negate it
+	ldaa	#1			; otherwise dy is positive
+	staa	sy			; set positive step-y flag
+	bra	_init			; continue to init code
+_negate2:				; negate dy so it's now positive
+	clra
+	clrb
+	subd	dy
+	std	dy
+	clr	sy			; set step-x flag to 0 (negative step)
+
+_init:
+	jsr	xy_plot_0		; plot endpoints
+	jsr	xy_plot_1
+
+	ldd	dx			; compare dx and dy
+	subd	dy	
+;	bcc	_y_init			; if dx < dy jump to y init
+	bmi	_y_init			; if dx < dy jump to y init
+
+_x_init:
+	ldd	dx
+	lsrd				; divide dx by 2 (interation count)
+	ldx	#0			; clear x
+	abx				; store in x register (loop counter)
+	;asl16	dy			; dy <<= 1
+	ldd	dy
+	asld
+	std	dy
+	
+	;dif16	f, dy, dx		; f = dy - dx
+	subd	dx
+	std	f
+	;asl16	dx			; dx <<= 1
+	ldd	dx
+	asld
+	std	dx
+_x_loop:
+	ldd	f			; load high byte of f into a
+	bmi	_change_x		; if f < 0 jump to change x
+	ldaa	sy			; load step-y flag
+	beq	_skip1			; 0 means negative, jump over positive code
+	dec	Y1			; decrement Y1 coordinate
+	inc	Y0			; increment Y0 coordinate
+	bra	_subtract_dx		; relative jump to subtract dx (always taken)
+_skip1:	inc	Y1			; increment Y1
+	dec	Y0			; decrement Y0
+_subtract_dx:
+	;sub16	f, dx			; f -= dx
+	ldd	f
+	subd	dx
+	std	f
+_change_x:
+	ldaa	sx			; load step-x flag
+	beq	_skip2			; 0 means negative, jump over positve code
+	dec	X1			; decrement X1 coordinate
+	inc	X0			; increment X0 coordinate
+	bra	_x_plot			; branch to x plot (always taken)
+_skip2:
+	inc	X1			; increment X1 coordinate
+	dec	X0			; decrement X0 coordinate
+_x_plot:
+	pshx
+	bsr	xy_plot_0		; plot endpoints
+	jsr	xy_plot_1
+	pulx
+
+	;add16	f, dy			; f += dy
+	ldd	f
+	addd	dy
+	std	f
+
+	dex				; decrement loop counter (x register)
+	bne	_x_loop			; jump to top of x loop
+
+	pula				; restore registers
+	pulb
+	pulx
+	rts				; return from line routine
+
+_y_init:
+	ldx	#0
+	ldd	dy			; load y difference
+	lsrb				; divide dy by 2 (interation count)
+	abx				; store in x register (loop counter)
+	;asl16	dx			; dy <<= 1
+	ldd	dx
+	asld
+	std	dx
+	;dif16	f, dx, dy		; f = dx - dy
+	ldd	dx
+	subd	dy
+	std	f
+	;asl16	dy			; dy <<= 1
+	ldd	dy
+	asld
+	std	dy
+_y_loop:
+	ldd	f			; load high byte of f into a
+	bmi	_change_y		; if f < 0 jump to change y
+	ldaa	sx			; load step-x flag
+	beq	_skip3			; 0 means negative, jump over positive code
+	dec	X1			; decrement Y1 coordinate
+	inc	X0			; increment Y0 coordinate
+	bra	_subtract_dy		; relative jump to subtract dy (always taken)
+_skip3:
+	inc	X1			; increment Y1
+	dec	X0			; decrement Y0
+_subtract_dy:
+	;sub16	f, dy			; f -= dy
+	ldd	f
+	subd	dy
+	std	f
+_change_y:
+	ldaa	sy			; load step-y flag
+	beq	_skip4			; 0 means negative, jump over positve code
+	dec	Y1			; decrement Y1 coordinate
+	inc	Y0			; increment Y0 coordinate
+	bra	_y_plot			; branch to y plot (always taken)
+_skip4:
+	inc	Y1			; increment Y1 coordinate
+	dec	Y0			; decrement Y0 coordinate
+_y_plot:
+	pshx
+	bsr	xy_plot_0		; plot endpoints
+	jsr	xy_plot_1
+	pulx
+
+	;add16	f, dx			; f += dx
+	ldd	f
+	addd	dx
+	std	f
+
+	dex				; decrement loop counter (x register)
+	bne	_y_loop			; jump to top of y loop
+
+	pula
+	pulb
+	pulx
+	rts				; return from line routine
+
+;**************************************************
+;* NAME: _xy_plot_0 
+;**************************************************
+;* DESCRIPTION:
+; plot the X0,Y0 coordinate
+;**************************************************
+.MODULE XY_PLOT_0
+xy_plot_0
+	;get address for line Y0
+	ldd	HY0
+	mul					; multiply by 32 (number of bytes/line), 32 is already in high byte
+	addd	#screen		; add base screen address, d now contains screen line address
+	std	temp0			; transfer to x.   TDX and TXD instructions would be so much nicer
+	ldx	temp0
+;	XGDX				; transer D to X by exchanging the two (6303 instruction)
+ 
+	; now add the byte offset for X0
+	ldab	X0			; calculate byte offset for X0
+	lsrb				;  just use top 5 bits
+	lsrb
+#ifdef	RGMODE			; RG modes have twice as many pixels per byte
+	lsrb
+#endif
+	abx					; add to screen line address, x now contains the screen pointer
+	stx	temp0			; save screen address for later
+
+	; get the pixel set mask
+	ldx	#PixelLookupSet		;clear x
+	ldab	X0			; now get bottom 3 bits of X for pixel info
+#ifdef	RGMODE
+	andb	#%00000111
+#endif
+#ifdef	CGMODE
+	andb	#%00000011
+#endif
+	abx				; add it to x
+	ldaa	,x			; get pixel mask
+#ifdef	CGMODE
+	tab				; copy it to B
+	anda	FGCOLOR			; and with color mask
+#endif
+	; update to the screen
+	ldx	temp0			; recover the screen address
+#ifdef	CGMODE
+	andb	,x			; AND pixel with current screen data
+	stab	temp0
+	oraa	temp0
+	staa	,x
+#endif
+#ifdef	RGMODE
+	oraa	,x			; OR pixel with current screen data
+	staa	,x			; save it back to the screen
+#endif
+;	; get the pixel reset mask
+;	ldx	#PixelLookupReset	;clear x
+;	ldab	X0			; now get bottom 3 bits of X for pixel info
+;	andb	#%00000111
+;	abx				; add it to x
+;	ldaa	,x			; get pixel
+;	; update the screen
+;	ldx	temp0			; recover the screen address
+;	anda	,x			; and pixel mask with current screen data
+;	staa	,x			; save it back to the screen
+
+	rts				; return
+	
+;**************************************************
+;* NAME: _xy_plot_1
+;**************************************************
+;* DESCRIPTION:
+; plot the X1,Y1 coordinate
+;**************************************************
+.MODULE XY_PLOT_1
+xy_plot_1
+	;get address for line Y1
+	ldd	HY1
+	mul					; multiply by 32 (number of bytes/line), 32 is already in high byte
+	addd	#screen		; add base screen address, d now contains screen line address
+	std	temp0			; transfer to x.   TDX and TXD instructions would be so much nicer
+	ldx	temp0
+;	XGDX				; transer D to X by exchanging the two (6303 instruction)
+
+	; now add the byte offset for X0
+	ldab	X1			; calculate byte offset for X1
+	lsrb				;  just use top 5 bits
+	lsrb
+#ifdef	RGMODE			; RG modes have twice as many pixels per byte
+	lsrb
+#endif
+	abx					; add to screen line address, x now contains the screen pointer
+	stx	temp0			; save screen address for later
+
+	; get the pixel set mask
+	ldx	#PixelLookupSet		;clear x
+	ldab	X1			; now get bottom 3 bits of X for pixel info
+#ifdef	RGMODE
+	andb	#%00000111		; 8 pixels / byte
+#endif
+#ifdef	CGMODE
+	andb	#%00000011		; 4 pixels / byte
+#endif
+	abx				; add it to x
+	ldaa	,x			; get pixel mask
+#ifdef	CGMODE
+	anda	FGCOLOR			; and with color mask
+#endif
+	; update to the screen
+	ldx	temp0			; recover the screen address
+#ifdef	CGMODE
+	andb	,x			; AND pixel with current screen data
+	stab	temp0
+	oraa	temp0
+	staa	,x
+#endif
+#ifdef	RGMODE
+	oraa	,x			; OR pixel with current screen data
+	staa	,x			; save it back to the screen
+#endif
+
+;	; get the pixel reset mask
+;	ldx	#PixelLookupReset	;clear x
+;	ldab	X1			; now get bottom 3 bits of X for pixel info
+;	andb	#%00000111
+;	abx				; add it to x
+;	ldaa	,x			; get pixel
+;	; update the screen
+;	ldx	temp0			; recover the screen address
+;	anda	,x			; and pixel mask with current screen data
+;	staa	,x			; save it back to the screen
+	rts				; return
+
+
+	
+;**************************************************
+;* Pixel Lookup table for setting pixels
+;**************************************************
+PixelLookupSet:
+#ifdef	RGMODE
+	fcb	%10000000
+	fcb	%01000000
+	fcb	%00100000
+	fcb	%00010000
+	fcb	%00001000
+	fcb	%00000100
+	fcb	%00000010
+	fcb	%00000001
+#endif
+#ifdef	CGMODE
+	fcb	%11000000
+	fcb	%00110000
+	fcb	%00001100
+	fcb	%00000011
+#endif
+
+;**************************************************
+;* Pixel Lookup table for resetting pixels
+;**************************************************
+PixelLookupReset:
+#ifdef	RGMODE
+	fcb	%01111111
+	fcb	%10111111
+	fcb	%11011111
+	fcb	%11101111
+	fcb	%11110111
+	fcb	%11111011
+	fcb	%11111101
+	fcb	%11111110
+#endif
+#ifdef	CGMODE
+	fcb	%00111111
+	fcb	%11001111
+	fcb	%11110011
+	fcb	%11111100
+#endif
+
+
+;**************************************************
+;* print_at
+;**************************************************
+;* Prints a string at a screen location
+;* works similar to print@ in BASIC
+;*  d contains @ location
+;*  x contains string pointer
+;* falls through to _print
+;**************************************************
+.MODULE Print_AT
+print_at:
+	stab	temp0			;save it
+	andb	#(BytesPerLine*2)-1	;%00111111	;mask of row bits
+	stab	col			;save the column
+	ldab	temp0			;restore it
+	andb	#254-(BytesPerLine*2)	;%11000000	;mask off column bits
+	lsld				;rotate bits into a
+	lsld
+	staa	row			;save row
+		
+;**************************************************
+;* print
+;**************************************************
+;* Prints a zero terminated string at the current x,y location
+;*  x contains the string pointer
+;**************************************************
+.MODULE Print
+print:
+	ldaa	,x			; get a character from the string
+	cmpa	#0
+	beq		_printexit	; exit if it's a zero
+	pshx				; save x
+	jsr		print_64	; print the character
+	pulx				; restore x
+	inx					; increment the string pointer x
+	bra		print		; keep printing
+_printexit:				; we are done
+	rts
+
+	
+;**************************************************
+; NAME: print_64
+;**************************************************
+;* Description:
+;*  64 Column text display driver
+;*  Routine does not print at pixel X,Y but
+;*  prints at a character position.
+;*  Once a string printing routine is written, 
+;*  some of the code may be moved to that.
+;**************************************************
+.MODULE Print_64
+print_64:
+	; a contains character
+	tab				; copy to b
+	anda	#%00000001		; get least significat bit (determines odd/even)
+	lsla
+	staa	temp1			; save it (OddEvenCharacter flag)
+
+	subb	#' '			; printable character set data starts at space, ASCII 32
+	lsrb				;  divide by two because table has data for two characters in each byte
+	ldaa	#7			;  7 bytes per character
+	mul				;  multiply them
+;nextch:	
+	addd	#font			; base address of font
+	std	charptr			; save to character pointer
+	
+	; convert the row to the base screen address
+	clrb				;  clear the LSB for below
+	ldaa	row			; load row into A
+#if BytesPerLine = 32			; 32 bytes per row, * 8 rows per line = 256, just load into MSB to multiply by 256
+					; nothing to do
+#endif
+#if BytesPerLine = 16		; 16 bytes per row, * 8 rows per line = 128, load into MSB and shift right (/2)
+	lsra				;  divide by 2
+	rorb
+#endif
+#if BytesPerLine = 8		; 8 bytes per row, * 8 rows per line = 64, load into MSB and shift right shift right (/4)
+					; shift could have been either direction (LSB * 4 or MSB / 4) but already in A so...
+	lsra				; divide by 4
+	rorb
+	lsra
+	rorb
+#endif
+;#else					; multiply is faster if more shifting is required (not used just an example)
+;					;  actually, loading into LSB and shifting left would be faster but it doesn't matter anyway
+;					;  since there is no mode less than 8 bytes / line or more than 32 / line
+;	ldaa	row			; load row into A
+;	ldab	#(BytesPerLine*8)	; size of a ROW
+;	mul				; mul by number of ROWs
+;#endif
+	addd	#(BytesPerLine+screen)	; top line of character is always blank so skip it
+	std	fscreen			; save it.
+
+	; add the column
+	ldab	col			; calculate byte offset
+	andb	#%00000001		; Hi/Lo nibble flag in a
+	addb	temp1			;  add the current Odd Even Column flag
+					;  Bit 0 now contains OE char flag, bit 1 now contains OE screen flag
+	clra
+	lslb				;  multiply by 2 because jump table is 4 longs not bytes
+	addd	#_ChrJmpTBL
+	std	temp0
+
+	ldab	col			; 2 columns / byte
+	lsrb
+	clra
+	addd	fscreen			; add the screen line address
+	std	fscreen			; save it
+
+	ldab	#7
+	stab	fcount
+
+	sei				; disable interrupts
+	tsx				; get stack pointer
+	stx	stacktmp		; save the stack pointer
+	ldx	charptr
+	txs				; point the stack to the current character
+
+	; use the least significant bits of the character and column
+	; we grabbed and shifted as an offset into the jump table
+	; it may be faster overall just to do a few tests and branches but I haven't checked yet
+	ldx	temp0			; get the offset
+	ldx	,x			; load the routine address
+	jmp	,x			; call it
+
+_ChrJmpTBL:
+	fdb	_ll_lp			;left nibble left side
+	fdb	_lr_lp			;left nibble right side
+	fdb	_rl_lp			;right nibble left side
+	fdb	_rr_lp			;right nibble right side
+
+	
+;**************************************************
+; WRITE A CHARACTER TO THE SCREEN
+; There are four separate routines
+;**************************************************
+
+;**************************************************
+;* left nibble on left hand side 
+;**************************************************
+_ll_lp:
+	ldx	fscreen		; point to screen byte
+_ll_lp2:
+	pula			; get byte of font and point to next font data
+	anda	%11110000	; mask area used by new character
+	ldab	,x		; read byte at destination
+	andb	%00001111	; mask off unused half
+	staa	temp0
+	orab	temp0		; combine with background
+	stab	,x		; write it back
+
+	ldab	#BytesPerLine	; 32 bytes / row
+	abx			; point to next screen location
+
+	dec	fcount		; loop 7 times
+	bne	_ll_lp2
+	bra	_charexit
+	
+;**************************************************
+; right nibble on right hand side
+;**************************************************
+_rr_lp:
+	ldx	fscreen		; point to screen destination
+_rr_lp2:
+	pula			; get byte of font and point to next font data
+	anda	%00001111	; mask area used by new character
+	ldab	,x		; read byte at destination
+	andb	%11110000	; mask off unused half
+	staa	temp0
+	orab	temp0		; combine with background
+	stab	,x		; write it back
+
+	ldab	#BytesPerLine	; 32 bytes / row
+	abx			; point to next screen location
+
+	dec	fcount		; loop 8 times
+	bne	_rr_lp2
+	bra	_charexit
+
+
+;**************************************************
+; left nibble on right hand side
+;**************************************************
+_lr_lp:
+	ldx	fscreen		; read byte at destination
+_lr_lp2:
+	pula			; get byte of font and point to next font data
+	lsra			; shift right
+	lsra			; four bits
+	lsra			; leaving 7-4
+	lsra			; empty
+
+;	anda	%00001111	; mask area used by new character, not needed since logical shift brings in zeros
+	ldab	,x		; read byte at destination
+	andb	%11110000	; mask off unused half
+	staa	temp0
+	orab	temp0		; combine with background
+	stab	,x		; write it back
+	
+	ldab	#BytesPerLine	; 32 bytes / row
+	abx			; point to next screen location
+
+	dec	fcount		; loop 7 times
+	bne	_lr_lp2
+;	bra	_charexit	; not needed, just fall through to exit routine
+
+;**************************************************
+; common masking code
+;**************************************************
+	ldaa	256-(END_LOOP-SKIP_RLC)
+	bcc		NOT_RLC
+	ldaa	256-(END_LOOP-INIT_RLC)
+NOT_RLC
+	staa	END_LOOP-1
+	
+	
+	ldaa	%00001111
+	bcc		SCR_LEFT
+	
+SCR_LEFT
+	staa	SCR_MASK+1
+	
+	ldaa	SKIP_RLC+1
+	
+
+_lr_lp:
+	ldx	fscreen		; read byte at destination
+
+	clra			; first byte is always zero
+
+	
+	pula			; get byte of font and point to next font data
+	lsra			; shift right
+	lsra			; four bits
+	lsra			; leaving 7-4
+	lsra			; empty
+SKIP_RLC:
+	anda	%00001111	; mask area used by new character, not needed since logical shift brings in zeros
+	ldab	,x		; read byte at destination
+SCR_MASK:
+	andb	%11110000	; mask off unused half
+	staa	temp0
+	orab	temp0		; combine with background
+	stab	,x		; write it back
+	
+	ldab	#BytesPerLine	; 32 bytes / row
+	abx			; point to next screen location
+
+	dec	fcount		; loop 7 times
+_lr_lp5:
+	pula
+	bne	_lr_lp2
+END_LOOP:
+;	bra	_charexit	; not needed, just fall through to exit routine
+
+;**************************************************
+;shared exit code placed in a center routine to make sure it stays within range of a relative branch
+;**************************************************
+_charexit:
+	;restore stack pointer and interrupts
+	ldx	stacktmp	; restore the stack pointer
+	txs
+	cli			; enable interrupts
+
+	;update column, row, and scroll when needed
+	ldaa	col		; next column
+	inca
+	staa	col
+	cmpa	#(BytesPerLine*2)	; 64 chsrs / line (0-63)
+	bne	_cexit		; is column past the end of a line?
+	clr	col		; set column to zero
+	ldaa	row		; increment the row
+	inca
+	staa	row
+	cmpa	#(ScreenHeight/8)	; 24 lines (0-23)
+	blt	_cexit		; branch if row isn't past the end of the screen
+	dec	row		; reduce row back to last line
+	;bsr	scroll		; scroll the screen
+	bra	scroll		; scroll the screen and return directly from there, saves a few clocks
+_cexit:	rts			; return
+
+
+;**************************************************
+;* right nibble on left hand side
+;**************************************************
+_rl_lp:
+	ldx	fscreen		; point to screen destination
+_rl_lp2:
+	pula			; get byte of font and point to next font data
+	lsla
+	lsla
+	lsla
+	lsla
+
+;	anda	%11110000	; mask area used by new character, not needed since logical shift brings in zeros
+	ldab	,x		; read byte at destination
+	andb	%00001111	; mask off unused half
+	staa	temp0
+	orab	temp0		; combine with background
+	stab	,x		; write it back
+
+	ldab	#BytesPerLine	; 32 bytes / row
+	abx			; point to next screen location
+
+	dec	fcount		; loop 7 times
+	bne	_rl_lp2		
+	bra	_charexit
+
+;**************************************************
+;* NAME: scroll
+;**************************************************
+;* Description:
+;*  scroll the 24 line display
+;**************************************************
+.MODULE Scroll
+scroll:
+	ldd	#((ScreenHeight-8)*(BytesPerLine/2))	;scroll # char lines-1, 8 lines /char, # bytes/row / 2 bytes per loop
+	inca
+	std	temp0			; loop counter
+	sei				; disable interrupts
+	tsx				; get stack pointer
+	stx	stacktmp		; save the stack pointer
+	ldx	#screen+(BytesPerLine*8)	; character line +1
+	txs				; point the stack to the current character
+	ldx	#screen			;
+	;the scroll section
+_scrolla:
+	pula				; grab 2 bytes from a row lower on the screen
+	pulb
+	std	,x			; store them in their new location a row up
+	inx				; increment x twice since we are doing two bytes at a time
+	inx
+	dec	temp0+1			; decrement the low byte of our loop counter
+	bne	_scrolla			; branch until it's zero
+ 	dec	temp0			; decrement the high byte of our loop counter
+	bgt	_scrolla			; keep going until it's zero
+
+	;restore stack & interrupts
+	ldx	stacktmp		; restore the stack pointer
+	txs
+	cli				; enable interrupts
+	
+	;clear the bottom line
+	ldaa	#(BytesPerLine*(8/2))	; # bytes/row, # rows / char, set 2 bytes at a time
+	staa	temp0			; loop counter
+	ldx	#screen+(BytesPerLine*(ScreenHeight-8))	; starting screen address
+	ldd	#0			; to clear bytes with
+_scrollb:
+	std	,x			; clear 2 bytes
+	inx				; increment the pointer twice since we are doing 2 at a time
+	inx
+	dec	temp0			; decrement the loop counter
+	bne	_scrollb			; go until the counter hits zero
+	
+	rts				; done
+	
+
+;**************************************************
+; TEXT VARIABLES
+; Used by the 64 column driver
+: not used at this time
+;**************************************************
+;atflg:		;attribute flag on spectrum, we don't use it
+;	fcb	0		; AT flag
+
+;row:
+;	fcb	0		; row
+;
+;col:
+;	fcb	0		; col
+
+;**************************************************
+; HALF WIDTH 4x8 FONT
+; Top row is always zero and not stored (336 bytes)
+; characters are 4 bits wide and 7 bits high 
+; (the top row is always blank)
+; There are two characters stored in each group of
+; 7 bytes.  Each byte has bits for one character in
+; the high nibble and bits for another in the low nibble
+; Font borrowed from Sinclair Spectrum code
+;**************************************************
+.MODULE Font
+font:
+	fcb	$02, $02, $02, $02, $00, $02, $00	; !
+	fcb	$52, $57, $02, $02, $07, $02, $00	;"#
+	fcb	$25, $71, $62, $32, $74, $25, $00	;$%
+	fcb	$22, $42, $30, $50, $50, $30, $00	;&'
+	fcb	$14, $22, $41, $41, $41, $22, $14	;()
+	fcb	$20, $70, $22, $57, $02, $00, $00	;*+
+	fcb	$00, $00, $00, $07, $00, $20, $20	;,-
+	fcb	$01, $01, $02, $02, $04, $14, $00	;./
+	fcb	$22, $56, $52, $52, $52, $27, $00	;01
+	fcb	$27, $51, $12, $21, $45, $72, $00	;23
+	fcb	$57, $54, $56, $71, $15, $12, $00	;45
+	fcb	$17, $21, $61, $52, $52, $22, $00	;67
+	fcb	$22, $55, $25, $53, $52, $24, $00	;89
+	fcb	$00, $00, $22, $00, $00, $22, $02	;:;
+	fcb	$00, $10, $27, $40, $27, $10, $00	;<=
+	fcb	$02, $45, $21, $12, $20, $42, $00	;>?
+	fcb	$23, $55, $75, $77, $45, $35, $00	;@A
+	fcb	$63, $54, $64, $54, $54, $63, $00	;BC
+	fcb	$67, $54, $56, $54, $54, $67, $00	;DE
+	fcb	$73, $44, $64, $45, $45, $43, $00	;FG
+	fcb	$57, $52, $72, $52, $52, $57, $00	;HI
+	fcb	$35, $15, $16, $55, $55, $25, $00	;JK
+	fcb	$45, $47, $45, $45, $45, $75, $00	;LM
+	fcb	$62, $55, $55, $55, $55, $52, $00	;NO
+	fcb	$62, $55, $55, $65, $45, $43, $00	;PQ
+	fcb	$63, $54, $52, $61, $55, $52, $00	;RS
+	fcb	$75, $25, $25, $25, $25, $22, $00	;TU
+	fcb	$55, $55, $55, $55, $27, $25, $00	;VW
+	fcb	$55, $55, $25, $22, $52, $52, $00	;XY
+	fcb	$73, $12, $22, $22, $42, $72, $03	;Z[
+	fcb	$46, $42, $22, $22, $12, $12, $06	;\]
+	fcb	$20, $50, $00, $00, $00, $00, $0f	;^_
+	fcb	$20, $10, $03, $05, $05, $03, $00	;£a
+	fcb	$40, $40, $63, $54, $54, $63, $00	;bc
+	fcb	$10, $10, $32, $55, $56, $33, $00	;de
+	fcb	$10, $20, $73, $25, $25, $43, $06	;fg
+	fcb	$42, $40, $66, $52, $52, $57, $00	;hi
+	fcb	$14, $04, $35, $16, $15, $55, $20	;jk
+	fcb	$60, $20, $25, $27, $25, $75, $00	;lm
+	fcb	$00, $00, $62, $55, $55, $52, $00	;no
+	fcb	$00, $00, $63, $55, $55, $63, $41	;pq
+	fcb	$00, $00, $53, $66, $43, $46, $00	;rs
+	fcb	$00, $20, $75, $25, $25, $12, $00	;tu
+	fcb	$00, $00, $55, $55, $27, $25, $00	;vw
+	fcb	$00, $00, $55, $25, $25, $53, $06	;xy
+	fcb	$01, $02, $72, $34, $62, $72, $01	;z{
+	fcb	$24, $22, $22, $21, $22, $22, $04	;|}
+	fcb	$56, $a9, $06, $04, $06, $09, $06	;~©
+	
+
+;MODULE .AUTOSTART
+;autostart:
+;	org		$4285		; overwrite RVEC5 - extension hook for line input
+;	jmp		START		; call our own code
+	
+	end
+;**************************************************
+;**************************************************
